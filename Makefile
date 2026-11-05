@@ -25,6 +25,13 @@ reset:
 	@$(MAKE) build
 	@echo ">>> Контейнеры перезапущены (данные сохранены), бинарники пересобраны в bin/!"
 
+# 4. Сборка всех бинарников в bin/
+build:
+	@mkdir -p bin
+	go build -o bin/account-service ./cmd/account-service
+	go build -o bin/payment-service ./cmd/payment-service
+	go build -o bin/api-gateway ./cmd/api-gateway
+
 # 5. Очистка бинарников (proto НЕ ТРОГАЕТ)
 clean: clean-bin
 
