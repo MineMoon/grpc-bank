@@ -39,6 +39,8 @@ api-gateway
 | `Makefile` | запуск, сборка, миграции и кодогенерация |
 | `AGENTS.md` | краткая памятка для ИИ-агентов |
 
+Юнит-тесты лежат рядом с пакетами в файлах `*_test.go`.
+
 ## Требования
 
 - Go 1.26 или новее.
@@ -51,6 +53,8 @@ api-gateway
 ```bash
 go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@latest
 ```
+
+Если `migrate` установлен не в `$(go env GOPATH)/bin`, передайте путь явно: `make start MIGRATE="$(which migrate)"`.
 
 ## Быстрый старт
 
@@ -151,29 +155,41 @@ make proto
 
 ## Проверка
 
-Автоматических тестов в репозитории пока нет. Базовая проверка сборки:
+Юнит-тесты не требуют Postgres, Docker и запущенных сервисов.
 
 ```bash
 go build ./...
 go vet ./...
+go test ./...
 ```
 
-`go vet` сейчас сообщает о двух ошибках форматирования в `pkg/postgres/postgres.go` (аргументы без директив). Их стоит исправить перед добавлением CI.
+Один пакет или один тест:
 
-Ручная проверка: запустить сервисы и выполнить запросы из раздела «Быстрый старт».
+```bash
+go test ./internal/payment/service
+go test ./internal/payment/service -run TestPaymentServiceIdempotency -v
+```
+
+Покрытие:
+
+```bash
+go test -cover ./...
+```
+
+Тесты покрывают сервисы, gRPC-обработчики, HTTP-шлюз, конфигурацию и разбор DSN. SQL-запросы, транзакции и блокировки в репозиториях не покрыты: для них нужен живой Postgres. Ручная проверка описана в разделе «Быстрый старт».
 
 ## Известные ограничения
 
 - Перевод между сервисами не является распределённой транзакцией: `payment-service` пишет строку `PENDING`, вызывает `account-service`, затем обновляет статус. Если обновление статуса упадёт, деньги уже будут переведены.
 - gRPC reflection включён в обоих сервисах для отладки.
 - Пароль Postgres по умолчанию (`postgresadmin`) подходит только для локальной разработки.
-- CI и автотесты отсутствуют.
+- CI отсутствует. Есть только юнит-тесты без Postgres; интеграционных тестов нет.
 
 ## Устранение неполадок
 
 | Проблема | Решение |
 |---|---|
-| `make start` падает с `migrate: command not found` | установить `golang-migrate` по инструкции выше |
+| `make start` падает с `migrate: command not found` | установить `golang-migrate` или передать путь: `make start MIGRATE="$(which migrate)"` |
 | `database ... does not exist` | выполнить `make clean-db`, затем `make start` |
 | `connection refused` на порту 50051 или 50052 | запустить `account-service` и `payment-service` |
 | Порт занят | изменить переменную окружения с портом |
