@@ -11,7 +11,7 @@ import (
 func NewPGXPool(ctx context.Context, connString string) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(connString)
 	if err != nil {
-		return nil, fmt.Errorf("Config Parsing Error", err)
+		return nil, fmt.Errorf("config parsing error: %w", err)
 	}
 
 	config.MaxConns = 20
@@ -21,7 +21,7 @@ func NewPGXPool(ctx context.Context, connString string) (*pgxpool.Pool, error) {
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
-		return nil, fmt.Errorf("Pool Creating Error", err)
+		return nil, fmt.Errorf("pool creating error: %w", err)
 	}
 
 	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
