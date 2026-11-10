@@ -14,12 +14,17 @@ import (
 	"grpc-bank/internal/gateway/handler"
 	accountpb "grpc-bank/pkg/api/account"
 	paymentpb "grpc-bank/pkg/api/payment"
+	"grpc-bank/pkg/env"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
+	if err := env.Load(env.File()); err != nil {
+		log.Fatalf("env load error: %v", err)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config load error: %v", err)

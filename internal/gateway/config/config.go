@@ -1,28 +1,31 @@
 package config
 
-import "os"
+import (
+	"os"
+
+	"grpc-bank/pkg/env"
+)
+
+const (
+	httpPortKey    = "GATEWAY_HTTP_PORT"
+	accountAddrKey = "ACCOUNT_SERVICE_ADDR"
+	paymentAddrKey = "PAYMENT_SERVICE_ADDR"
+)
 
 type Config struct {
-	HTTPPort string
+	HTTPPort           string
 	AccountServiceAddr string
 	PaymentServiceAddr string
 }
 
 func Load() (*Config, error) {
-	httpPort := getEnv("GATEWAY_HTTP_PORT", "8080")
-	accountServiceAddr := getEnv("ACCOUNT_SERVICE_ADDR", "localhost:50051")
-	paymentServiceAddr := getEnv("PAYMENT_SERVICE_ADDR", "localhost:50052")
+	if err := env.Required(httpPortKey, accountAddrKey, paymentAddrKey); err != nil {
+		return nil, err
+	}
 
 	return &Config{
-		HTTPPort:           httpPort,
-		AccountServiceAddr: accountServiceAddr,
-		PaymentServiceAddr: paymentServiceAddr,
+		HTTPPort:           os.Getenv(httpPortKey),
+		AccountServiceAddr: os.Getenv(accountAddrKey),
+		PaymentServiceAddr: os.Getenv(paymentAddrKey),
 	}, nil
-}
-
-func getEnv(key, defaultVault string) string {
-	if val, exists := os.LookupEnv(key); exists && val != "" {
-		return val
-	}
-	return defaultVault
 }

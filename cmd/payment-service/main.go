@@ -15,6 +15,7 @@ import (
 	"grpc-bank/internal/payment/service"
 	accountpb "grpc-bank/pkg/api/account"
 	paymentpb "grpc-bank/pkg/api/payment"
+	"grpc-bank/pkg/env"
 	"grpc-bank/pkg/postgres"
 
 	"google.golang.org/grpc"
@@ -23,6 +24,10 @@ import (
 )
 
 func main() {
+	if err := env.Load(env.File()); err != nil {
+		log.Fatalf("env load error: %v", err)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config load error: %v", err)
@@ -74,7 +79,7 @@ func main() {
 		log.Println("Termination signal received. Stopping gRPC server...")
 		grpcServer.GracefulStop()
 		cancel()
-	} ()
+	}()
 
 	log.Printf("Payment Service has been successfully started on the gRPC port :%s\n", cfg.GRPCPort)
 	if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {

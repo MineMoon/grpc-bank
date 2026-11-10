@@ -8,6 +8,7 @@ import (
 	"grpc-bank/internal/account/repository"
 	"grpc-bank/internal/account/service"
 	accountpb "grpc-bank/pkg/api/account"
+	"grpc-bank/pkg/env"
 	"grpc-bank/pkg/postgres"
 	"log"
 	"net"
@@ -20,6 +21,10 @@ import (
 )
 
 func main() {
+	if err := env.Load(env.File()); err != nil {
+		log.Fatalf("env load error: %v", err)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config load error: %v", err)
@@ -39,7 +44,7 @@ func main() {
 	accountService := service.NewAccountService(accountRepo)
 	accountHandler := handler.NewAccountHandler(accountService)
 
-	lis, err :=  net.Listen("tcp", fmt.Sprintf(":%s", cfg.GRPCPort))
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", cfg.GRPCPort))
 	if err != nil {
 		log.Fatalf("tcp port open error :%s: %v", cfg.GRPCPort, err)
 	}
@@ -56,14 +61,13 @@ func main() {
 		log.Println("Termination signal received. Stopping gRPC server...")
 		grpcServer.GracefulStop()
 		cancel()
-	} ()
+	}()
 
 	log.Printf("Account Service has been successfully started on the gRPC port :%s\n", cfg.GRPCPort)
-	if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {		
+	if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
 		log.Fatalf("gRPC server crashed: %v", err)
 	}
 
 	log.Println("Account Service has been stopped correctly.")
 
 }
-

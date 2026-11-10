@@ -1,6 +1,15 @@
 # grpc-bank
 
-Демонстрационный банковский сервис на Go: HTTP-шлюз, gRPC-сервисы и PostgreSQL с отдельными базами.
+Демонстрационный банковский сервис на Go: HTTP-шлюз, gRPC-сервисы и PostgreSQL с отдельными базами.
+
+## Возможности
+
+- Создание счёта с уникальным номером вида `40817810` + 12 цифр; валюта по умолчанию `RUB`.
+- Один счёт на пользователя в каждой валюте: уникальный индекс `user_id` + `currency`, повтор возвращает `409`.
+- Пополнение счёта и перевод между счетами.
+- Перевод выполняется в одной транзакции с блокировкой строк `FOR UPDATE`; при недостатке средств возвращается `422`.
+- Идемпотентные платежи по `idempotency_key`: повтор с тем же ключом не создаёт второй перевод.
+- Баланс не может быть отрицательным (`CHECK (balance >= 0)`); деньги хранятся как `NUMERIC(18,4)` и `shopspring/decimal`, без `float`.
 
 ## Архитектура
 
@@ -32,10 +41,13 @@ api-gateway
 | `internal/gateway` | конфиг, DTO, обработчики и роутер шлюза |
 | `api/proto` | исходные описания gRPC |
 | `pkg/api` | сгенерированный Go-код (не редактировать вручную) |
+| `pkg/env` | загрузка `.env` и обязательных переменных |
 | `pkg/postgres` | создание пула pgx |
 | `migrations/accounts_db` | миграции базы счетов |
 | `migrations/payments_db` | миграции базы платежей |
-| `deployments` | docker-compose и init.sql |
+| `deployments` | docker-compose и скрипт создания баз |
+| `scripts` | запуск всех сервисов одной командой |
+| `.env.example` | шаблон конфигурации, копируется в `.env` |
 | `Makefile` | запуск, сборка, миграции и кодогенерация |
 | `AGENTS.md` | краткая памятка для ИИ-агентов |
 
@@ -58,17 +70,15 @@ go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@lates
 
 ## Быстрый старт
 
-1. Поднять базу, применить миграции и собрать бинарники:
+1. Создать конфигурацию. `make start` создаёт `.env` из `.env.example` автоматически, если файла нет. Чтобы заранее изменить значения, скопируйте шаблон вручную:
+   ```bash
+   cp .env.example .env
+   ```
+2. Поднять базу, применить миграции, собрать бинарники и запустить все сервисы:
    ```bash
    make start
    ```
-   Результат: `bin/account-service`, `bin/payment-service`, `bin/api-gateway`.
-2. Запустить сервисы в отдельных терминалах (порядок важен):
-   ```bash
-   ./bin/account-service
-   ./bin/payment-service
-   ./bin/api-gateway
-   ```
+   Команда поднимает Postgres, ждёт готовности, накатывает миграции, собирает `bin/account-service`, `bin/payment-service` и `bin/api-gateway`, затем запускает их по порядку. `Ctrl+C` останавливает сервисы; контейнер Postgres продолжает работать до `make down`.
 3. Создать два счёта. `user_id` должен быть UUID:
    ```bash
    curl -X POST http://localhost:8080/api/v1/accounts \
@@ -98,28 +108,43 @@ go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@lates
 | `POST` | `/api/v1/accounts/deposit` | пополнить счёт |
 | `POST` | `/api/v1/transfers` | создать перевод |
 
-Суммы передаются строками, например `"1000.00"`. Внутри используется `shopspring/decimal` и `NUMERIC(18,4)`.
+Суммы передаются строками, например `"1000.00"`. Внутри используется `shopspring/decimal` и `NUMERIC(18,4)`.
+
+Тела запросов и ответы:
+
+- `POST /api/v1/accounts` принимает `{"user_id":"<UUID>","currency":"RUB"}` и возвращает `201` с `{"account_id":"...","account_number":"..."}`. Пустая валюта заменяется на `RUB`. Повторный счёт для той же пары пользователь + валюта даёт `409`.
+- `GET /api/v1/accounts/{id}` возвращает `{"account_id","user_id","account_number","balance","currency"}` или `404`.
+- `POST /api/v1/accounts/deposit` принимает `{"account_id":"<UUID>","amount":"1000.00"}` и возвращает `{"status":"SUCCESS","balance_after":"..."}`.
+- `POST /api/v1/transfers` принимает `{"idempotency_key":"...","from_account_id":"<UUID>","to_account_id":"<UUID>","amount":"10.00"}` и возвращает `{"payment_id","status","created_at"}`; `created_at` в формате RFC3339.
+
+Коды ошибок шлюза: `400` для некорректного тела или аргументов, `404` для ненайденного счёта, `409` для существующего счёта, `422` для отклонённого перевода (в том числе недостатка средств и повторного использования ключа идемпотентности в статусе `PENDING` или `FAILED`), `500` для внутренних ошибок.
+
+Повторный перевод с уже успешным `idempotency_key` возвращает существующий платёж со статусом `SUCCESS` и не переводит деньги ещё раз.
 
 ## Конфигурация
 
-Все настройки читаются из переменных окружения. Файл `.env` не подхватывается автоматически.
+Все настройки читаются из переменных окружения. Каждый сервис при старте загружает `.env` из текущего каталога; путь можно переопределить через `ENV_FILE`. Уже заданные переменные окружения имеют приоритет над файлом. Значений по умолчанию в коде нет: обязательные переменные перечислены в `.env.example`.
 
-| Сервис | Переменная | Значение по умолчанию |
+| Переменная | Кто читает | Назначение |
 |---|---|---|
-| account-service | `ACCOUNT_SERVICE_GRPC_PORT` | `50051` |
-| account-service | `ACCOUNT_SERVICE_DB_URL` | `postgres://postgres:postgresadmin@127.0.0.1:5432/accounts_db?sslmode=disable` |
-| payment-service | `PAYMENT_SERVICE_GRPC_PORT` | `50052` |
-| payment-service | `PAYMENT_SERVICE_DB_URL` | `postgres://postgres:postgresadmin@127.0.0.1:5432/payments_db?sslmode=disable` |
-| payment-service | `ACCOUNT_SERVICE_ADDR` | `127.0.0.1:50051` |
-| api-gateway | `GATEWAY_HTTP_PORT` | `8080` |
-| api-gateway | `ACCOUNT_SERVICE_ADDR` | `localhost:50051` |
-| api-gateway | `PAYMENT_SERVICE_ADDR` | `localhost:50052` |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD` | Postgres, сервисы, миграции | пользователь и пароль |
+| `POSTGRES_HOST`, `POSTGRES_PORT` | сервисы, миграции | адрес базы |
+| `POSTGRES_SSLMODE` | сервисы, миграции | режим SSL |
+| `ACCOUNTS_DB_NAME`, `PAYMENTS_DB_NAME` | Postgres, сервисы | имена баз |
+| `ACCOUNT_SERVICE_GRPC_PORT` | account-service | gRPC-порт |
+| `PAYMENT_SERVICE_GRPC_PORT` | payment-service | gRPC-порт |
+| `GATEWAY_HTTP_PORT` | api-gateway | HTTP-порт |
+| `ACCOUNT_SERVICE_ADDR` | payment-service, api-gateway | адрес account-service |
+| `PAYMENT_SERVICE_ADDR` | api-gateway | адрес payment-service |
+| `ACCOUNT_SERVICE_DB_URL`, `PAYMENT_SERVICE_DB_URL` | сервисы, миграции | полный DSN вместо сборки из `POSTGRES_*` (необязательно) |
 
-`POSTGRES_PASSWORD` влияет только на контейнер Postgres. URL миграций в `Makefile` заданы жёстко, поэтому при смене пароля их нужно обновить вручную.
+`Makefile` собирает DSN из `POSTGRES_*` и имён баз, поэтому смена пароля или порта в `.env` не требует правок в других файлах.
+
+`Makefile` подключает `.env` как фрагмент make-синтаксиса, поэтому значения должны быть без пробелов и символа `#`. Если файла нет, он создаётся из `.env.example` при любом запуске `make`.
 
 ## База данных и миграции
 
-- `deployments/init.sql` создаёт `accounts_db` и `payments_db` только при первой инициализации тома `pgdata`.
+- `deployments/init.sh` создаёт базы из `ACCOUNTS_DB_NAME` и `PAYMENTS_DB_NAME` только при первой инициализации тома `pgdata`.
 - Если база потерялась, пересоздайте том: `make clean-db`, затем `make start`.
 - Миграции лежат отдельно для каждой базы: `migrations/accounts_db` и `migrations/payments_db`.
 - Новая миграция: пара файлов `<номер>_<имя>.up.sql` и `<номер>_<имя>.down.sql` в нужном каталоге.
@@ -141,10 +166,13 @@ make proto
 
 | Команда | Действие |
 |---|---|
-| `make start` | поднять Postgres, применить миграции и собрать бинарники |
+| `make start` | поднять Postgres, применить миграции, собрать бинарники и запустить все сервисы |
+| `make run` | запустить собранные сервисы без миграций и пересборки |
+| `make infra` | поднять только Postgres и дождаться готовности |
 | `make build` | собрать три бинарника в `bin/` |
 | `make down` | остановить контейнеры |
-| `make reset` | перезапустить Postgres без потери данных и пересобрать бинарники |
+| `make reset` | перезапустить Postgres без потери данных и пересобрать бинарники |
+| `make clean` | удалить `bin/` (то же, что `clean-bin`) |
 | `make clean-bin` | удалить `bin/` |
 | `make clean-db` | удалить том `pgdata` |
 | `make clean-all` | удалить `bin/` и том `pgdata` |
@@ -152,6 +180,12 @@ make proto
 | `make migrate-down` | откатить все миграции |
 | `make proto` | перегенерировать Go-код из `.proto` |
 | `make proto-clean` | удалить сгенерированный код |
+
+## Недавние изменения
+
+- Конфигурация перенесена в `.env`: сервисы загружают файл через `pkg/env`, `ENV_FILE` указывает другой путь, экспортированные переменные окружения имеют приоритет над файлом.
+- `make start` теперь создаёт `.env` из `.env.example`, поднимает Postgres, применяет миграции, собирает бинарники и запускает все три сервиса по порядку через `scripts/run.sh`.
+- `deployments/init.sh` создаёт `accounts_db` и `payments_db` из переменных `ACCOUNTS_DB_NAME` и `PAYMENTS_DB_NAME` при первой инициализации тома.
 
 ## Проверка
 
@@ -182,7 +216,7 @@ go test -cover ./...
 
 - Перевод между сервисами не является распределённой транзакцией: `payment-service` пишет строку `PENDING`, вызывает `account-service`, затем обновляет статус. Если обновление статуса упадёт, деньги уже будут переведены.
 - gRPC reflection включён в обоих сервисах для отладки.
-- Пароль Postgres по умолчанию (`postgresadmin`) подходит только для локальной разработки.
+- Пароль из `.env.example` (`postgresadmin`) подходит только для локальной разработки.
 - CI отсутствует. Есть только юнит-тесты без Postgres; интеграционных тестов нет.
 
 ## Устранение неполадок
@@ -190,6 +224,6 @@ go test -cover ./...
 | Проблема | Решение |
 |---|---|
 | `make start` падает с `migrate: command not found` | установить `golang-migrate` или передать путь: `make start MIGRATE="$(which migrate)"` |
-| `database ... does not exist` | выполнить `make clean-db`, затем `make start` |
-| `connection refused` на порту 50051 или 50052 | запустить `account-service` и `payment-service` |
-| Порт занят | изменить переменную окружения с портом |
+| `database ... does not exist` | проверить имена баз в `.env`, выполнить `make clean-db`, затем `make start` |
+| `connection refused` на порту 50051 или 50052 | запустить сервисы: `make run` |
+| Порт занят | изменить порт в `.env` |

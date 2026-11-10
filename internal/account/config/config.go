@@ -1,32 +1,34 @@
 package config
 
 import (
-	"fmt"
 	"os"
+
+	"grpc-bank/pkg/env"
+)
+
+const (
+	grpcPortKey = "ACCOUNT_SERVICE_GRPC_PORT"
+	dbURLKey    = "ACCOUNT_SERVICE_DB_URL"
+	databaseKey = "ACCOUNTS_DB_NAME"
 )
 
 type Config struct {
 	GRPCPort string
-	DBURL string
+	DBURL    string
 }
 
 func Load() (*Config, error) {
-	port := getEnv("ACCOUNT_SERVICE_GRPC_PORT", "50051")
-	dbURL := getEnv("ACCOUNT_SERVICE_DB_URL", "postgres://postgres:postgresadmin@127.0.0.1:5432/accounts_db?sslmode=disable")
+	if err := env.Required(grpcPortKey); err != nil {
+		return nil, err
+	}
 
-	if dbURL == "" {
-		return nil, fmt.Errorf("переменная ACCOUNT_SERVICE_DB_URL обязательна")
+	dbURL, err := env.DatabaseURL(dbURLKey, databaseKey)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Config{
-		GRPCPort: port,
+		GRPCPort: os.Getenv(grpcPortKey),
 		DBURL:    dbURL,
 	}, nil
-}
-
-func getEnv(key, defaulValue string) string {
-	if val, exists := os.LookupEnv(key); exists && val != "" {
-		return val
-	}
-	return defaulValue
 }

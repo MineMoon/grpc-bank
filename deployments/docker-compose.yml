@@ -4,17 +4,19 @@ services:
     container_name: bank_postgres
     restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgresadmin}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required, see .env.example}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see .env.example}
+      ACCOUNTS_DB_NAME: ${ACCOUNTS_DB_NAME:?ACCOUNTS_DB_NAME is required, see .env.example}
+      PAYMENTS_DB_NAME: ${PAYMENTS_DB_NAME:?PAYMENTS_DB_NAME is required, see .env.example}
     ports:
-      - 5432:5432
+      - "${POSTGRES_PORT:?POSTGRES_PORT is required, see .env.example}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./init.sh:/docker-entrypoint-initdb.d/init.sh:ro
     networks:
       - bank-network
     healthcheck:
-      test: [CMD-SHELL, pg_isready -U postgres]
+      test: [CMD-SHELL, "pg_isready -U $${POSTGRES_USER}"]
       interval: 2s
       timeout: 2s
       retries: 10
