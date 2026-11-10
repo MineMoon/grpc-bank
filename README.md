@@ -35,7 +35,9 @@ api-gateway
 | `pkg/postgres` | создание пула pgx |
 | `migrations/accounts_db` | миграции базы счетов |
 | `migrations/payments_db` | миграции базы платежей |
-| `deployments` | docker-compose и init.sql |
+| `deployments` | docker-compose и скрипт создания баз |
+| `scripts` | запуск всех сервисов одной командой |
+| `.env.example` | шаблон конфигурации, копируется в `.env` |
 | `Makefile` | запуск, сборка, миграции и кодогенерация |
 | `AGENTS.md` | краткая памятка для ИИ-агентов |
 
@@ -58,17 +60,15 @@ go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@lates
 
 ## Быстрый старт
 
-1. Поднять базу, применить миграции и собрать бинарники:
+1. Создать конфигурацию. При запуске `make start` файл `.env` создаётся автоматически из шаблона:
+   ```bash
+   cp .env.example .env
+   ```
+2. Поднять базу, применить миграции, собрать бинарники и запустить все сервисы:
    ```bash
    make start
    ```
-   Результат: `bin/account-service`, `bin/payment-service`, `bin/api-gateway`.
-2. Запустить сервисы в отдельных терминалах (порядок важен):
-   ```bash
-   ./bin/account-service
-   ./bin/payment-service
-   ./bin/api-gateway
-   ```
+   Команда поднимает Postgres, ждёт готовности, накатывает миграции, собирает `bin/account-service`, `bin/payment-service` и `bin/api-gateway`, затем запускает их по порядку. `Ctrl+C` останавливает сервисы; контейнер Postgres продолжает работать до `make down`.
 3. Создать два счёта. `user_id` должен быть UUID:
    ```bash
    curl -X POST http://localhost:8080/api/v1/accounts \
@@ -102,24 +102,26 @@ go install -tags postgres github.com/golang-migrate/migrate/v4/cmd/migrate@lates
 
 ## Конфигурация
 
-Все настройки читаются из переменных окружения. Файл `.env` не подхватывается автоматически.
+Все настройки читаются из переменных окружения. Каждый сервис при старте загружает `.env` из текущего каталога; путь можно переопределить через `ENV_FILE`. Уже заданные переменные окружения имеют приоритет над файлом. Значений по умолчанию в коде нет: обязательные переменные перечислены в `.env.example`.
 
-| Сервис | Переменная | Значение по умолчанию |
+| Переменная | Кто читает | Назначение |
 |---|---|---|
-| account-service | `ACCOUNT_SERVICE_GRPC_PORT` | `50051` |
-| account-service | `ACCOUNT_SERVICE_DB_URL` | `postgres://postgres:postgresadmin@127.0.0.1:5432/accounts_db?sslmode=disable` |
-| payment-service | `PAYMENT_SERVICE_GRPC_PORT` | `50052` |
-| payment-service | `PAYMENT_SERVICE_DB_URL` | `postgres://postgres:postgresadmin@127.0.0.1:5432/payments_db?sslmode=disable` |
-| payment-service | `ACCOUNT_SERVICE_ADDR` | `127.0.0.1:50051` |
-| api-gateway | `GATEWAY_HTTP_PORT` | `8080` |
-| api-gateway | `ACCOUNT_SERVICE_ADDR` | `localhost:50051` |
-| api-gateway | `PAYMENT_SERVICE_ADDR` | `localhost:50052` |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD` | Postgres, сервисы, миграции | пользователь и пароль |
+| `POSTGRES_HOST`, `POSTGRES_PORT` | сервисы, миграции | адрес базы |
+| `POSTGRES_SSLMODE` | сервисы, миграции | режим SSL |
+| `ACCOUNTS_DB_NAME`, `PAYMENTS_DB_NAME` | Postgres, сервисы | имена баз |
+| `ACCOUNT_SERVICE_GRPC_PORT` | account-service | gRPC-порт |
+| `PAYMENT_SERVICE_GRPC_PORT` | payment-service | gRPC-порт |
+| `GATEWAY_HTTP_PORT` | api-gateway | HTTP-порт |
+| `ACCOUNT_SERVICE_ADDR` | payment-service, api-gateway | адрес account-service |
+| `PAYMENT_SERVICE_ADDR` | api-gateway | адрес payment-service |
+| `ACCOUNT_SERVICE_DB_URL`, `PAYMENT_SERVICE_DB_URL` | сервисы, миграции | полный DSN вместо сборки из `POSTGRES_*` (необязательно) |
 
-`POSTGRES_PASSWORD` влияет только на контейнер Postgres. URL миграций в `Makefile` заданы жёстко, поэтому при смене пароля их нужно обновить вручную.
+`Makefile` собирает DSN из `POSTGRES_*` и имён баз, поэтому смена пароля или порта в `.env` не требует правок в других файлах.
 
 ## База данных и миграции
 
-- `deployments/init.sql` создаёт `accounts_db` и `payments_db` только при первой инициализации тома `pgdata`.
+- `deployments/init.sh` создаёт базы из `ACCOUNTS_DB_NAME` и `PAYMENTS_DB_NAME` только при первой инициализации тома `pgdata`.
 - Если база потерялась, пересоздайте том: `make clean-db`, затем `make start`.
 - Миграции лежат отдельно для каждой базы: `migrations/accounts_db` и `migrations/payments_db`.
 - Новая миграция: пара файлов `<номер>_<имя>.up.sql` и `<номер>_<имя>.down.sql` в нужном каталоге.
@@ -141,7 +143,9 @@ make proto
 
 | Команда | Действие |
 |---|---|
-| `make start` | поднять Postgres, применить миграции и собрать бинарники |
+| `make start` | поднять Postgres, применить миграции, собрать бинарники и запустить все сервисы |
+| `make run` | запустить собранные сервисы без миграций и пересборки |
+| `make infra` | поднять только Postgres и дождаться готовности |
 | `make build` | собрать три бинарника в `bin/` |
 | `make down` | остановить контейнеры |
 | `make reset` | перезапустить Postgres без потери данных и пересобрать бинарники |
@@ -182,7 +186,7 @@ go test -cover ./...
 
 - Перевод между сервисами не является распределённой транзакцией: `payment-service` пишет строку `PENDING`, вызывает `account-service`, затем обновляет статус. Если обновление статуса упадёт, деньги уже будут переведены.
 - gRPC reflection включён в обоих сервисах для отладки.
-- Пароль Postgres по умолчанию (`postgresadmin`) подходит только для локальной разработки.
+- Пароль из `.env.example` (`postgresadmin`) подходит только для локальной разработки.
 - CI отсутствует. Есть только юнит-тесты без Postgres; интеграционных тестов нет.
 
 ## Устранение неполадок
@@ -190,6 +194,6 @@ go test -cover ./...
 | Проблема | Решение |
 |---|---|
 | `make start` падает с `migrate: command not found` | установить `golang-migrate` или передать путь: `make start MIGRATE="$(which migrate)"` |
-| `database ... does not exist` | выполнить `make clean-db`, затем `make start` |
-| `connection refused` на порту 50051 или 50052 | запустить `account-service` и `payment-service` |
-| Порт занят | изменить переменную окружения с портом |
+| `database ... does not exist` | проверить имена баз в `.env`, выполнить `make clean-db`, затем `make start` |
+| `connection refused` на порту 50051 или 50052 | запустить сервисы: `make run` |
+| Порт занят | изменить порт в `.env` |
