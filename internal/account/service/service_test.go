@@ -76,9 +76,12 @@ func TestAccountServiceGetAccount(t *testing.T) {
 		if acc != nil {
 			t.Fatalf("expected nil account, got %+v", acc)
 		}
+
+		// review
 		if repo.getCalls != 0 {
 			t.Fatalf("expected repository not to be called, got %d calls", repo.getCalls)
 		}
+
 	})
 
 	t.Run("returns repository account", func(t *testing.T) {

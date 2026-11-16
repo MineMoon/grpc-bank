@@ -5,6 +5,7 @@ $(info >>> .env не найден, создан из .env.example)
 endif
 -include .env
 
+GO ?= $(shell which go)
 MIGRATE ?= $(shell go env GOPATH)/bin/migrate
 COMPOSE_FILE ?= deployments/docker-compose.yml
 
@@ -44,9 +45,9 @@ reset:
 # 6. Сборка всех бинарников в bin/
 build:
 	@mkdir -p bin
-	go build -o bin/account-service ./cmd/account-service
-	go build -o bin/payment-service ./cmd/payment-service
-	go build -o bin/api-gateway ./cmd/api-gateway
+	$(GO) build -o bin/account-service ./cmd/account-service
+	$(GO) build -o bin/payment-service ./cmd/payment-service
+	$(GO) build -o bin/api-gateway ./cmd/api-gateway
 
 # 7. Очистка бинарников (proto НЕ ТРОГАЕТ)
 clean: clean-bin
